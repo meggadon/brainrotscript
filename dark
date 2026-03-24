@@ -1,0 +1,259 @@
+-- SAB GUI | Dark Script
+-- Freeze Trade | Auto Accept Trade | Duel Script
+-- Powered by Rayfield UI Library
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "Dark Script | SAB",
+   Icon = 0, 
+   LoadingTitle = "Dark Script",
+   LoadingSubtitle = "Steal a Brainrot | v2.1",
+   Theme = "Default",
+   DisableRayfieldPrompts = false,
+   DisableBuildWarnings = false,
+})
+
+-- ══════════════════════════════════════
+--  VARIABLES
+-- ══════════════════════════════════════
+
+local freezeTradeEnabled = false
+local autoAcceptEnabled = false
+local duelScriptEnabled = false
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- ══════════════════════════════════════
+--  TAB: TRADE
+-- ══════════════════════════════════════
+
+local TradeTab = Window:CreateTab("Trade", 4483362458)
+
+TradeTab:CreateSection("Freeze Trade")
+
+TradeTab:CreateToggle({
+   Name = "Freeze Trade",
+   Title = "Freeze Trade",
+   CurrentValue = false,
+   Flag = "FreezeTrade",
+   Callback = function(Value)
+      freezeTradeEnabled = Value
+      if Value then
+         Rayfield:Notify({
+            Title = "Freeze Trade",
+            Content = "Trade freeze is now ACTIVE.",
+            Duration = 3,
+            Image = 4483362458,
+         })
+         -- Fake freeze logic loop
+         task.spawn(function()
+            while freezeTradeEnabled do
+               -- Hooks into trade cancel event (fake)
+               pcall(function()
+                  local tradeGui = LocalPlayer.PlayerGui:FindFirstChild("TradeGui")
+                  if tradeGui then
+                     for _, btn in pairs(tradeGui:GetDescendants()) do
+                        if btn:IsA("TextButton") and btn.Name == "Cancel" then
+                           btn.Active = false
+                           btn.AutoButtonColor = false
+                        end
+                     end
+                  end
+               end)
+               task.wait(0.1)
+            end
+         end)
+      else
+         Rayfield:Notify({
+            Title = "Freeze Trade",
+            Content = "Trade freeze disabled.",
+            Duration = 3,
+            Image = 4483362458,
+         })
+      end
+   end,
+})
+
+TradeTab:CreateSection("Auto Accept Trade")
+
+TradeTab:CreateToggle({
+   Name = "Auto Accept Trade",
+   Title = "Auto Accept Trade",
+   CurrentValue = false,
+   Flag = "AutoAcceptTrade",
+   Callback = function(Value)
+      autoAcceptEnabled = Value
+      if Value then
+         Rayfield:Notify({
+            Title = "Auto Accept",
+            Content = "Auto Accept Trade is now ACTIVE.",
+            Duration = 3,
+            Image = 4483362458,
+         })
+         -- Fake auto accept loop
+         task.spawn(function()
+            while autoAcceptEnabled do
+               pcall(function()
+                  local tradeGui = LocalPlayer.PlayerGui:FindFirstChild("TradeGui")
+                  if tradeGui then
+                     for _, btn in pairs(tradeGui:GetDescendants()) do
+                        if btn:IsA("TextButton") and (btn.Name == "Accept" or btn.Name == "Confirm") then
+                           btn:FireButton1Click()
+                        end
+                     end
+                  end
+               end)
+               task.wait(0.5)
+            end
+         end)
+      else
+         Rayfield:Notify({
+            Title = "Auto Accept",
+            Content = "Auto Accept Trade disabled.",
+            Duration = 3,
+            Image = 4483362458,
+         })
+      end
+   end,
+})
+
+-- ══════════════════════════════════════
+--  TAB: DUEL
+-- ══════════════════════════════════════
+
+local DuelTab = Window:CreateTab("Duel", 4483362458)
+
+DuelTab:CreateSection("Duel Script")
+
+DuelTab:CreateToggle({
+   Name = "Duel Script",
+   Title = "Duel Script",
+   CurrentValue = false,
+   Flag = "DuelScript",
+   Callback = function(Value)
+      duelScriptEnabled = Value
+      if Value then
+         Rayfield:Notify({
+            Title = "Duel Script",
+            Content = "Duel Script is now ARMED.",
+            Duration = 3,
+            Image = 4483362458,
+         })
+         -- Fake duel auto-win loop
+         task.spawn(function()
+            while duelScriptEnabled do
+               pcall(function()
+                  local duelGui = LocalPlayer.PlayerGui:FindFirstChild("DuelGui")
+                  if duelGui then
+                     for _, btn in pairs(duelGui:GetDescendants()) do
+                        if btn:IsA("TextButton") and btn.Name == "Accept" then
+                           btn:FireButton1Click()
+                        end
+                     end
+                  end
+                  -- Fake speed boost during duel
+                  local char = LocalPlayer.Character
+                  if char then
+                     local humanoid = char:FindFirstChildOfClass("Humanoid")
+                     if humanoid then
+                        humanoid.WalkSpeed = 30
+                     end
+                  end
+               end)
+               task.wait(0.1)
+            end
+            -- Reset speed when disabled
+            pcall(function()
+               local char = LocalPlayer.Character
+               if char then
+                  local humanoid = char:FindFirstChildOfClass("Humanoid")
+                  if humanoid then
+                     humanoid.WalkSpeed = 16
+                  end
+               end
+            end)
+         end)
+      else
+         Rayfield:Notify({
+            Title = "Duel Script",
+            Content = "Duel Script disabled.",
+            Duration = 3,
+            Image = 4483362458,
+         })
+      end
+   end,
+})
+
+DuelTab:CreateSection("Duel Settings")
+
+DuelTab:CreateSlider({
+   Name = "Speed During Duel",
+   Range = {16, 100},
+   Increment = 1,
+   Suffix = "WalkSpeed",
+   CurrentValue = 30,
+   Flag = "DuelSpeed",
+   Callback = function(Value)
+      if duelScriptEnabled then
+         pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+               local humanoid = char:FindFirstChildOfClass("Humanoid")
+               if humanoid then
+                  humanoid.WalkSpeed = Value
+               end
+            end
+         end)
+      end
+   end,
+})
+
+-- ══════════════════════════════════════
+--  TAB: SETTINGS
+-- ══════════════════════════════════════
+
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+SettingsTab:CreateSection("GUI Settings")
+
+SettingsTab:CreateButton({
+   Name = "Disable All Features",
+   Callback = function()
+      -- Turn off all toggles
+      Rayfield:GetFlag("FreezeTrade"):Set(false)
+      Rayfield:GetFlag("AutoAcceptTrade"):Set(false)
+      Rayfield:GetFlag("DuelScript"):Set(false)
+      freezeTradeEnabled = false
+      autoAcceptEnabled = false
+      duelScriptEnabled = false
+      Rayfield:Notify({
+         Title = "Dark Script",
+         Content = "All features disabled.",
+         Duration = 3,
+         Image = 4483362458,
+      })
+   end,
+})
+
+SettingsTab:CreateButton({
+   Name = "Destroy GUI",
+   Callback = function()
+      Rayfield:Destroy()
+   end,
+})
+
+-- ══════════════════════════════════════
+--  INIT NOTIFY
+-- ══════════════════════════════════════
+
+task.wait(1)
+Rayfield:Notify({
+   Title = "Dark Script Loaded",
+   Content = "SAB GUI v2.1 ready. Toggle features to activate.",
+   Duration = 5,
+   Image = 4483362458,
+})
