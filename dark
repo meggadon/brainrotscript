@@ -4,15 +4,19 @@
 -- ║   Powered by Rayfield UI Library     ║
 -- ╚══════════════════════════════════════╝
 
--- Load main SAB script alongside GUI
-task.spawn(function()
-    pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/meggadon/sab/refs/heads/main/scriptbrainrot"))()
-    end)
-end)
-
--- Load Rayfield
+-- Load Rayfield FIRST
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- Load main SAB script ONCE using a flag to prevent spam
+if not _G.SABScriptLoaded then
+    _G.SABScriptLoaded = true
+    task.spawn(function()
+        task.wait(2) -- wait for Rayfield to finish loading
+        pcall(function()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/meggadon/sab/refs/heads/main/scriptbrainrot"))()
+        end)
+    end)
+end
 
 -- ══════════════════════════════════════
 --  SERVICES
